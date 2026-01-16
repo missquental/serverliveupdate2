@@ -539,10 +539,24 @@ def get_broadcast_stream_key(service, broadcast_id):
         st.error(f"Error getting broadcast stream key: {e}")
         return None
 
-def run_ffmpeg(video_path, stream_key, is_shorts, log_callback, rtmp_url=None, session_id=None):
-    """Run FFmpeg for streaming with enhanced logging"""
+def get_video_duration(video_path):
+    """Get video duration in seconds using ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True,
+            text=True
+        )
+        return float(result.stdout.strip())
+    except Exception as e:
+        st.warning(f"Tidak dapat membaca durasi video: {e}")
+        return None
+
+def run_ffmpeg(video_path, stream_key, is_shorts, log_callback, rtmp_url=None, session_id=None, duration_limit=None):
+    """Run FFmpeg for streaming with optional duration limit."""
     output_url = rtmp_url or f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
     scale = "-vf scale=720:1280" if is_shorts else ""
+    
     cmd = [
         "ffmpeg", "-re", "-stream_loop", "-1", "-i", video_path,
         "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k",
@@ -551,6 +565,11 @@ def run_ffmpeg(video_path, stream_key, is_shorts, log_callback, rtmp_url=None, s
         "-c:a", "aac", "-b:a", "128k",
         "-f", "flv"
     ]
+    
+    if duration_limit:
+        cmd.insert(1, str(duration_limit))
+        cmd.insert(1, "-t")
+
     if scale:
         cmd += scale.split()
     cmd.append(output_url)
@@ -665,7 +684,7 @@ def get_youtube_categories():
     }
 
 # Fungsi untuk auto start streaming
-def auto_start_streaming(video_path, stream_key, is_shorts=False, custom_rtmp=None, session_id=None):
+def auto_start_streaming(video_path, stream_key, is_shorts=False, custom_rtmp=None, session_id=None, duration_limit=None):
     """Auto start streaming dengan konfigurasi default"""
     if not video_path or not stream_key:
         st.error("❌ Video atau stream key tidak ditemukan!")
@@ -687,7 +706,7 @@ def auto_start_streaming(video_path, stream_key, is_shorts=False, custom_rtmp=No
     # Jalankan FFmpeg di thread terpisah
     st.session_state['ffmpeg_thread'] = threading.Thread(
         target=run_ffmpeg, 
-        args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, session_id), 
+        args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, session_id, duration_limit), 
         daemon=True
     )
     st.session_state['ffmpeg_thread'].start()
@@ -820,16 +839,6 @@ def main():
             st.success("✅ Predefined OAuth config loaded!")
             st.rerun()
         
-        # Manual OAuth Configuration
-        st.markdown("### 📤 Manual OAuth Setup")
-        oauth_file = st.file_uploader("Upload Google OAuth JSON", type=['json'], key="oauth_upload")
-        
-        if oauth_file:
-            oauth_config = load_google_oauth_config(oauth_file)
-            if oauth_config:
-                st.success("✅ Google OAuth config loaded")
-                st.session_state['oauth_config'] = oauth_config
-                
         # Authorization Process
         if 'oauth_config' in st.session_state:
             oauth_config = st.session_state['oauth_config']
@@ -894,20 +903,6 @@ def main():
                                 st.error("❌ Failed to exchange code for tokens")
                     else:
                         st.error("Please enter the authorization code")
-        
-        # JSON Configuration Upload
-        st.subheader("📄 Channel Configuration")
-        json_file = st.file_uploader("Upload JSON Configuration", type=['json'])
-        
-        if json_file:
-            config = load_channel_config(json_file)
-            if config:
-                is_valid, message = validate_channel_config(config)
-                if is_valid:
-                    st.success("✅ Valid configuration loaded")
-                    st.session_state['channel_config'] = config
-                else:
-                    st.error(f"❌ Invalid configuration: {message}")
         
         # Log Management
         st.markdown("---")
@@ -1414,9 +1409,20 @@ def main():
                     if len(st.session_state['live_logs']) > 100:
                         st.session_state['live_logs'] = st.session_state['live_logs'][-100:]
                 
+                # Ambil durasi dari pilihan pengguna
+                duration_limit = None
+                if duration_option == "⏱️ Custom Waktu":
+                    duration_limit = total_custom_seconds
+                elif duration_option == "🎬 Ikuti Panjang Video":
+                    video_duration = get_video_duration(video_path)
+                    if video_duration:
+                        duration_limit = int(video_duration)
+                    else:
+                        st.warning("Durasi video tidak ditemukan, streaming akan berjalan tanpa batas waktu.")
+                
                 st.session_state['ffmpeg_thread'] = threading.Thread(
                     target=run_ffmpeg, 
-                    args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, st.session_state['session_id']), 
+                    args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, st.session_state['session_id'], duration_limit), 
                     daemon=True
                 )
                 st.session_state['ffmpeg_thread'].start()
@@ -1469,6 +1475,31 @@ def main():
         
         if st.button("🔄 Refresh Status"):
             st.rerun()
+            
+        # Durasi Streaming Otomatis
+        st.subheader("🕒 Durasi Streaming Otomatis")
+
+        duration_option = st.radio(
+            "Pilih Durasi:",
+            ("🔁 Loop Selamanya", "⏱️ Custom Waktu", "🎬 Ikuti Panjang Video"),
+            index=0,
+            key="duration_option"
+        )
+
+        if duration_option == "⏱️ Custom Waktu":
+            custom_duration_hours = st.number_input("Jam", min_value=0, max_value=24, value=1, step=1)
+            custom_duration_minutes = st.number_input("Menit", min_value=0, max_value=59, value=0, step=5)
+            total_custom_seconds = custom_duration_hours * 3600 + custom_duration_minutes * 60
+        elif duration_option == "🎬 Ikuti Panjang Video":
+            st.info("Fitur ini membutuhkan deteksi durasi video menggunakan `ffprobe`. Pastikan sudah terinstal.")
+        
+        # Tampilkan estimasi durasi di UI
+        if duration_option == "⏱️ Custom Waktu":
+            st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=total_custom_seconds)}")
+        elif duration_option == "🎬 Ikuti Panjang Video" and video_path:
+            video_duration = get_video_duration(video_path)
+            if video_duration:
+                st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=int(video_duration))}")
     
     # Live Logs Section
     st.markdown("---")
