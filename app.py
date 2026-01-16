@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import urllib.parse
 import requests
 import sqlite3
-from pathlib import Patch
+from pathlib import Path
 
 # Install required packages
 try:
