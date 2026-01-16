@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import urllib.parse
 import requests
 import sqlite3
-from pathlib import Path
+from pathlib import Patch
 
 # Install required packages
 try:
@@ -603,77 +603,6 @@ def run_ffmpeg(video_path, stream_key, is_shorts, log_callback, rtmp_url=None, s
         if session_id:
             log_to_database(session_id, "INFO", final_msg, video_path)
 
-def auto_process_auth_code():
-    """Automatically process authorization code from URL - FIXED VERSION"""
-    try:
-        # Debug: Show current query params
-        query_params = st.experimental_get_query_params()
-        st.write("Debug - Current query params:", query_params)  # Hapus baris ini setelah testing
-        
-        if 'code' in query_params:
-            auth_code = query_params['code'][0]  # Perhatikan: query_params mengembalikan list
-            
-            # Check if this code has been processed
-            if 'processed_codes' not in st.session_state:
-                st.session_state['processed_codes'] = set()
-            
-            if auth_code not in st.session_state['processed_codes']:
-                st.info(f"🔄 Processing authorization code...")
-                st.write(f"Code detected: {auth_code[:20]}...")  # Debug info
-                
-                if 'oauth_config' in st.session_state:
-                    with st.spinner("Exchanging code for tokens..."):
-                        tokens = exchange_code_for_tokens(st.session_state['oauth_config'], auth_code)
-                        
-                        if tokens:
-                            st.session_state['youtube_tokens'] = tokens
-                            st.session_state['processed_codes'].add(auth_code)
-                            
-                            # Create credentials for YouTube service
-                            oauth_config = st.session_state['oauth_config']
-                            creds_dict = {
-                                'access_token': tokens['access_token'],
-                                'refresh_token': tokens.get('refresh_token'),
-                                'token_uri': oauth_config['token_uri'],
-                                'client_id': oauth_config['client_id'],
-                                'client_secret': oauth_config['client_secret']
-                            }
-                            
-                            # Test the connection
-                            service = create_youtube_service(creds_dict)
-                            if service:
-                                channels = get_channel_info(service)
-                                if channels:
-                                    channel = channels[0]
-                                    st.session_state['youtube_service'] = service
-                                    st.session_state['channel_info'] = channel
-                                    
-                                    # Save channel authentication persistently
-                                    save_channel_auth(
-                                        channel['snippet']['title'],
-                                        channel['id'],
-                                        creds_dict
-                                    )
-                                    
-                                    st.success(f"✅ Successfully connected to: {channel['snippet']['title']}")
-                                    
-                                    # Clear URL parameters
-                                    st.experimental_set_query_params()
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Failed to fetch channel information")
-                            else:
-                                st.error("❌ Failed to create YouTube service")
-                        else:
-                            st.error("❌ Failed to exchange code for tokens")
-                else:
-                    st.error("❌ OAuth configuration not found. Please upload OAuth JSON first.")
-        else:
-            # Debug info ketika tidak ada code
-            st.write("No 'code' parameter found in URL")  # Hapus baris ini setelah testing
-    except Exception as e:
-        st.error(f"Error in auto_process_auth_code: {e}")
-
 def get_youtube_categories():
     """Get YouTube video categories"""
     return {
@@ -775,6 +704,99 @@ def auto_create_live_broadcast(service, use_custom_settings=True, custom_setting
         log_to_database(session_id, "ERROR", error_msg)
         return None
 
+def show_oauth_iframe():
+    """Show OAuth iframe for authentication"""
+    st.subheader("🔐 YouTube Authentication")
+    
+    if 'oauth_config' not in st.session_state:
+        st.session_state['oauth_config'] = PREDEFINED_OAUTH_CONFIG['web']
+    
+    oauth_config = st.session_state['oauth_config']
+    auth_url = generate_auth_url(oauth_config)
+    
+    if auth_url:
+        st.markdown("### 🔐 Authenticate with YouTube")
+        st.markdown("Click the button below to authenticate with your YouTube account:")
+        
+        # Create a button that opens OAuth in iframe
+        if st.button("🔑 Authenticate with YouTube", type="primary"):
+            st.session_state['show_oauth_iframe'] = True
+            st.rerun()
+        
+        if st.session_state.get('show_oauth_iframe', False):
+            st.markdown("### 🌐 Authentication Window")
+            st.info("Please complete the authentication in the window below:")
+            
+            # Create iframe HTML
+            iframe_html = f"""
+            <iframe src="{auth_url}" 
+                    width="100%" 
+                    height="600" 
+                    style="border: 1px solid #ccc; border-radius: 8px;">
+                <p>Your browser does not support iframes. Please 
+                <a href="{auth_url}" target="_blank">click here</a> to authenticate manually.</p>
+            </iframe>
+            """
+            
+            st.components.v1.html(iframe_html, height=600)
+            
+            st.markdown("---")
+            st.markdown("### 🔑 Manual Code Entry")
+            st.markdown("If you already have an authorization code, enter it below:")
+            
+            auth_code = st.text_input("Authorization Code", type="password", 
+                                    placeholder="Paste authorization code here...")
+            
+            if st.button("🔄 Exchange Code for Tokens"):
+                if auth_code:
+                    with st.spinner("Exchanging code for tokens..."):
+                        tokens = exchange_code_for_tokens(oauth_config, auth_code)
+                        if tokens:
+                            st.success("✅ Tokens obtained successfully!")
+                            st.session_state['youtube_tokens'] = tokens
+                            
+                            # Create credentials for YouTube service
+                            creds_dict = {
+                                'access_token': tokens['access_token'],
+                                'refresh_token': tokens.get('refresh_token'),
+                                'token_uri': oauth_config['token_uri'],
+                                'client_id': oauth_config['client_id'],
+                                'client_secret': oauth_config['client_secret']
+                            }
+                            
+                            # Test the connection
+                            service = create_youtube_service(creds_dict)
+                            if service:
+                                channels = get_channel_info(service)
+                                if channels:
+                                    channel = channels[0]
+                                    st.success(f"🎉 Connected to: {channel['snippet']['title']}")
+                                    st.session_state['youtube_service'] = service
+                                    st.session_state['channel_info'] = channel
+                                    
+                                    # Save channel authentication persistently
+                                    save_channel_auth(
+                                        channel['snippet']['title'],
+                                        channel['id'],
+                                        creds_dict
+                                    )
+                                    
+                                    # Hide iframe after successful auth
+                                    st.session_state['show_oauth_iframe'] = False
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Could not fetch channel information")
+                            else:
+                                st.error("❌ Failed to create YouTube service")
+                        else:
+                            st.error("❌ Failed to exchange code for tokens")
+                else:
+                    st.error("Please enter the authorization code")
+            
+            if st.button("❌ Close Authentication Window"):
+                st.session_state['show_oauth_iframe'] = False
+                st.rerun()
+
 def main():
     # Page configuration must be the first Streamlit command
     st.set_page_config(
@@ -796,8 +818,60 @@ def main():
     st.title("🎥 Advanced YouTube Live Streaming Platform")
     st.markdown("---")
     
-    # Auto-process authorization code if present - DIPANGGIL DI SINI
-    auto_process_auth_code()
+    # Check if we have URL parameters (for OAuth callback)
+    query_params = st.experimental_get_query_params()
+    
+    # Handle OAuth callback if present
+    if 'code' in query_params:
+        auth_code = query_params['code'][0]
+        st.info("🔄 Processing OAuth callback...")
+        
+        if 'oauth_config' in st.session_state:
+            with st.spinner("Exchanging authorization code for tokens..."):
+                tokens = exchange_code_for_tokens(st.session_state['oauth_config'], auth_code)
+                if tokens:
+                    st.session_state['youtube_tokens'] = tokens
+                    
+                    # Create credentials for YouTube service
+                    oauth_config = st.session_state['oauth_config']
+                    creds_dict = {
+                        'access_token': tokens['access_token'],
+                        'refresh_token': tokens.get('refresh_token'),
+                        'token_uri': oauth_config['token_uri'],
+                        'client_id': oauth_config['client_id'],
+                        'client_secret': oauth_config['client_secret']
+                    }
+                    
+                    # Test the connection
+                    service = create_youtube_service(creds_dict)
+                    if service:
+                        channels = get_channel_info(service)
+                        if channels:
+                            channel = channels[0]
+                            st.session_state['youtube_service'] = service
+                            st.session_state['channel_info'] = channel
+                            
+                            # Save channel authentication persistently
+                            save_channel_auth(
+                                channel['snippet']['title'],
+                                channel['id'],
+                                creds_dict
+                            )
+                            
+                            st.success(f"✅ Successfully connected to: {channel['snippet']['title']}")
+                            
+                            # Clear URL parameters
+                            st.experimental_set_query_params()
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error("❌ Failed to fetch channel information")
+                    else:
+                        st.error("❌ Failed to create YouTube service")
+                else:
+                    st.error("❌ Failed to exchange code for tokens")
+        else:
+            st.error("❌ OAuth configuration not found")
     
     # Sidebar for configuration
     with st.sidebar:
@@ -848,130 +922,44 @@ def main():
             st.session_state['oauth_config'] = PREDEFINED_OAUTH_CONFIG['web']
             st.success("✅ Predefined OAuth config loaded!")
             st.rerun()
-        
-        # Authorization Process
-        if 'oauth_config' in st.session_state:
-            oauth_config = st.session_state['oauth_config']
-            
-            # Generate authorization URL
-            auth_url = generate_auth_url(oauth_config)
-            if auth_url:
-                st.markdown("### 🔗 Authorization Link")
-                st.markdown(f"[Click here to authorize]({auth_url})")
-                
-                # Instructions
-                with st.expander("💡 Instructions"):
-                    st.write("1. Click the authorization link above")
-                    st.write("2. Grant permissions to your YouTube account")
-                    st.write("3. You'll be redirected back automatically")
-                    st.write("4. Or copy the code from the URL and paste below")
-                
-                # Manual authorization code input (fallback)
-                st.markdown("### 🔑 Manual Code Input")
-                auth_code = st.text_input("Authorization Code", type="password", 
-                                        placeholder="Paste authorization code here...")
-                
-                if st.button("🔄 Exchange Code for Tokens"):
-                    if auth_code:
-                        with st.spinner("Exchanging code for tokens..."):
-                            tokens = exchange_code_for_tokens(oauth_config, auth_code)
-                            if tokens:
-                                st.success("✅ Tokens obtained successfully!")
-                                st.session_state['youtube_tokens'] = tokens
-                                
-                                # Create credentials for YouTube service
-                                creds_dict = {
-                                    'access_token': tokens['access_token'],
-                                    'refresh_token': tokens.get('refresh_token'),
-                                    'token_uri': oauth_config['token_uri'],
-                                    'client_id': oauth_config['client_id'],
-                                    'client_secret': oauth_config['client_secret']
-                                }
-                                
-                                # Test the connection
-                                service = create_youtube_service(creds_dict)
-                                if service:
-                                    channels = get_channel_info(service)
-                                    if channels:
-                                        channel = channels[0]
-                                        st.success(f"🎉 Connected to: {channel['snippet']['title']}")
-                                        st.session_state['youtube_service'] = service
-                                        st.session_state['channel_info'] = channel
-                                        
-                                        # Save channel authentication persistently
-                                        save_channel_auth(
-                                            channel['snippet']['title'],
-                                            channel['id'],
-                                            creds_dict
-                                        )
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Could not fetch channel information")
-                                else:
-                                    st.error("❌ Failed to create YouTube service")
-                            else:
-                                st.error("❌ Failed to exchange code for tokens")
-                    else:
-                        st.error("Please enter the authorization code")
-        
-        # Log Management
-        st.markdown("---")
-        st.subheader("📊 Log Management")
-        
-        col_log1, col_log2 = st.columns(2)
-        with col_log1:
-            if st.button("🔄 Refresh Logs"):
-                st.rerun()
-        
-        with col_log2:
-            if st.button("🗑️ Clear Session Logs"):
-                st.session_state['live_logs'] = []
-                st.success("Logs cleared!")
-        
-        # Export logs
-        if st.button("📥 Export All Logs"):
-            all_logs = get_logs_from_database(limit=1000)
-            if all_logs:
-                logs_text = "\n".join([f"[{log[0]}] {log[1]}: {log[2]}" for log in all_logs])
-                st.download_button(
-                    label="💾 Download Logs",
-                    data=logs_text,
-                    file_name=f"streaming_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain"
-                )
     
     # Main content area
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.header("🎥 Video & Streaming Setup")
-        
-        # Video selection
-        video_files = [f for f in os.listdir('.') if f.endswith(('.mp4', '.flv', '.avi', '.mov', '.mkv'))]
-        
-        if video_files:
-            st.write("📁 Available videos:")
-            selected_video = st.selectbox("Select video", video_files)
+        # Check if user is authenticated
+        if 'youtube_service' not in st.session_state:
+            # Show OAuth iframe authentication
+            show_oauth_iframe()
         else:
-            selected_video = None
-            st.info("No video files found in current directory")
-        
-        # Video upload
-        uploaded_file = st.file_uploader("Or upload new video", type=['mp4', '.flv', '.avi', '.mov', '.mkv'])
-        
-        if uploaded_file:
-            with open(uploaded_file.name, "wb") as f:
-                f.write(uploaded_file.read())
-            st.success("✅ Video uploaded successfully!")
-            video_path = uploaded_file.name
-            log_to_database(st.session_state['session_id'], "INFO", f"Video uploaded: {uploaded_file.name}")
-        elif selected_video:
-            video_path = selected_video
-        else:
-            video_path = None
-        
-        # YouTube Authentication Status
-        if 'youtube_service' in st.session_state and 'channel_info' in st.session_state:
+            # User is authenticated, show main interface
+            st.header("🎥 Video & Streaming Setup")
+            
+            # Video selection
+            video_files = [f for f in os.listdir('.') if f.endswith(('.mp4', '.flv', '.avi', '.mov', '.mkv'))]
+            
+            if video_files:
+                st.write("📁 Available videos:")
+                selected_video = st.selectbox("Select video", video_files)
+            else:
+                selected_video = None
+                st.info("No video files found in current directory")
+            
+            # Video upload
+            uploaded_file = st.file_uploader("Or upload new video", type=['mp4', '.flv', '.avi', '.mov', '.mkv'])
+            
+            if uploaded_file:
+                with open(uploaded_file.name, "wb") as f:
+                    f.write(uploaded_file.read())
+                st.success("✅ Video uploaded successfully!")
+                video_path = uploaded_file.name
+                log_to_database(st.session_state['session_id'], "INFO", f"Video uploaded: {uploaded_file.name}")
+            elif selected_video:
+                video_path = selected_video
+            else:
+                video_path = None
+            
+            # YouTube Channel Info
             st.subheader("📺 YouTube Channel")
             channel = st.session_state['channel_info']
             col_ch1, col_ch2 = st.columns(2)
@@ -1252,347 +1240,232 @@ def main():
                         error_msg = f"Error loading existing broadcasts: {e}"
                         st.error(error_msg)
                         log_to_database(st.session_state['session_id'], "ERROR", error_msg)
-        
-        # Channel selection from JSON config
-        elif 'channel_config' in st.session_state:
-            st.subheader("📺 Channel Selection")
-            config = st.session_state['channel_config']
-            channel_options = [ch['name'] for ch in config['channels']]
-            selected_channel_name = st.selectbox("Select channel", channel_options)
-            
-            # Find selected channel
-            selected_channel = next((ch for ch in config['channels'] if ch['name'] == selected_channel_name), None)
-            
-            if selected_channel:
-                if 'current_stream_key' not in st.session_state:
-                    st.session_state['current_stream_key'] = selected_channel['stream_key']
-                st.info(f"Using stream key from: {selected_channel_name}")
-                
-                # Display channel info if auth is available
-                if 'auth' in selected_channel:
-                    st.subheader("🔐 Channel Authentication")
-                    if st.button("Verify Authentication"):
-                        service = create_youtube_service(selected_channel['auth'])
-                        if service:
-                            channels = get_channel_info(service)
-                            if channels:
-                                channel = channels[0]
-                                st.success(f"✅ Authenticated as: {channel['snippet']['title']}")
-                                st.write(f"Subscribers: {channel['statistics'].get('subscriberCount', 'Hidden')}")
-                                st.write(f"Total Views: {channel['statistics'].get('viewCount', '0')}")
-                                log_to_database(st.session_state['session_id'], "INFO", f"Channel authenticated: {channel['snippet']['title']}")
-                            else:
-                                st.error("❌ Could not fetch channel information")
-        else:
-            st.subheader("🔑 Manual Stream Key")
-            
-            # Check if we have a current stream key
-            current_key = st.session_state.get('current_stream_key', '')
-            manual_stream_key = st.text_input("Stream Key", 
-                                     value=current_key, 
-                                     type="password",
-                                     help="Enter your YouTube stream key or get one using the button above")
-            
-            # Update session state with manual input
-            if manual_stream_key:
-                st.session_state['current_stream_key'] = manual_stream_key
-            
-            if current_key:
-                st.success("✅ Using generated stream key")
-            else:
-                st.info("💡 Upload OAuth JSON and click 'Get Stream Key' for automatic key generation")
-        
-        # Enhanced Live Stream Settings
-        st.subheader("📝 Live Stream Settings")
-        
-        # Basic settings
-        col_basic1, col_basic2 = st.columns(2)
-        
-        with col_basic1:
-            stream_title = st.text_input("🎬 Stream Title", value="Live Stream", max_chars=100, key="stream_title_input")
-            privacy_status = st.selectbox("🔒 Privacy", ["public", "unlisted", "private"], key="privacy_status")
-            made_for_kids = st.checkbox("👶 Made for Kids", key="made_for_kids")
-        
-        with col_basic2:
-            categories = get_youtube_categories()
-            category_names = list(categories.values())
-            selected_category_name = st.selectbox("📂 Category", category_names, index=category_names.index("Gaming"))
-            category_id = [k for k, v in categories.items() if v == selected_category_name][0]
-            st.session_state['category_id'] = category_id
-            
-            # Stream schedule type
-            stream_schedule_type = st.selectbox("⏰ Schedule", ["📍 Simpan sebagai Draft", "🔴 Publish Sekarang"])
-        
-        # Description
-        stream_description = st.text_area("📄 Stream Description", 
-                                        value="Live streaming session", 
-                                        max_chars=5000,
-                                        height=100,
-                                        key="stream_description_input")
-        
-        # Tags
-        tags_input = st.text_input("🏷️ Tags (comma separated)", 
-                                 placeholder="gaming, live, stream, youtube",
-                                 key="tags_input")
-        tags = [tag.strip() for tag in tags_input.split(",") if tag.strip()] if tags_input else []
-        
-        if tags:
-            st.write("**Tags:**", ", ".join(tags))
-        
-        # Technical settings
-        with st.expander("🔧 Technical Settings"):
-            col_tech1, col_tech2 = st.columns(2)
-            
-            with col_tech1:
-                is_shorts = st.checkbox("📱 Shorts Mode (720x1280)")
-                enable_chat = st.checkbox("💬 Enable Live Chat", value=True)
-            
-            with col_tech2:
-                bitrate = st.selectbox("📊 Bitrate", ["1500k", "2500k", "4000k", "6000k"], index=1)
-                framerate = st.selectbox("🎞️ Frame Rate", ["24", "30", "60"], index=1)
-                resolution = st.selectbox("📺 Resolution", ["720p", "1080p", "1440p"], index=1)
-        
-        # Advanced settings
-        with st.expander("⚙️ Advanced Settings"):
-            custom_rtmp = st.text_input("🌐 Custom RTMP URL (optional)")
-            enable_dvr = st.checkbox("📹 Enable DVR", value=True)
-            enable_content_encryption = st.checkbox("🔐 Enable Content Encryption")
-            
-            # Thumbnail upload
-            thumbnail_file = st.file_uploader("🖼️ Custom Thumbnail", type=['jpg', 'jpeg', 'png'])
-            
-            # Monetization settings
-            st.subheader("💰 Monetization")
-            enable_monetization = st.checkbox("💵 Enable Monetization")
-            if enable_monetization:
-                ad_breaks = st.checkbox("📺 Enable Ad Breaks")
-                super_chat = st.checkbox("💬 Enable Super Chat", value=True)
     
     with col2:
         st.header("📊 Status & Controls")
         
-        # Streaming status
-        streaming = st.session_state.get('streaming', False)
-        if streaming:
-            st.error("🔴 LIVE")
-            
-            # Live stats
-            if 'stream_start_time' in st.session_state:
-                duration = datetime.now() - st.session_state['stream_start_time']
-                st.metric("⏱️ Duration", str(duration).split('.')[0])
-        else:
-            st.success("⚫ OFFLINE")
-        
-        # Control buttons
-        if st.button("▶️ Start Streaming", type="primary"):
-            # Get the current stream key
-            stream_key = st.session_state.get('current_stream_key', '')
-            
-            if not video_path:
-                st.error("❌ Please select or upload a video!")
-            elif not stream_key:
-                st.error("❌ Stream key is required!")
+        # Check if user is authenticated
+        if 'youtube_service' in st.session_state:
+            # Streaming status
+            streaming = st.session_state.get('streaming', False)
+            if streaming:
+                st.error("🔴 LIVE")
+                
+                # Live stats
+                if 'stream_start_time' in st.session_state:
+                    duration = datetime.now() - st.session_state['stream_start_time']
+                    st.metric("⏱️ Duration", str(duration).split('.')[0])
             else:
-                # Save streaming session
-                save_streaming_session(
-                    st.session_state['session_id'],
-                    video_path,
-                    stream_title,
-                    stream_description,
-                    ", ".join(tags),
-                    category_id,
-                    privacy_status,
-                    made_for_kids,
-                    st.session_state.get('channel_info', {}).get('snippet', {}).get('title', 'Unknown')
-                )
+                st.success("⚫ OFFLINE")
+            
+            # Control buttons
+            if st.button("▶️ Start Streaming", type="primary"):
+                # Get the current stream key
+                stream_key = st.session_state.get('current_stream_key', '')
                 
-                # Start streaming
-                st.session_state['streaming'] = True
-                st.session_state['stream_start_time'] = datetime.now()
-                st.session_state['live_logs'] = []
+                if not video_path:
+                    st.error("❌ Please select or upload a video!")
+                elif not stream_key:
+                    st.error("❌ Stream key is required!")
+                else:
+                    # Save streaming session
+                    save_streaming_session(
+                        st.session_state['session_id'],
+                        video_path,
+                        stream_title,
+                        stream_description,
+                        ", ".join(tags),
+                        category_id,
+                        privacy_status,
+                        made_for_kids,
+                        st.session_state.get('channel_info', {}).get('snippet', {}).get('title', 'Unknown')
+                    )
+                    
+                    # Start streaming
+                    st.session_state['streaming'] = True
+                    st.session_state['stream_start_time'] = datetime.now()
+                    st.session_state['live_logs'] = []
+                    
+                    def log_callback(msg):
+                        if 'live_logs' not in st.session_state:
+                            st.session_state['live_logs'] = []
+                        st.session_state['live_logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+                        # Keep only last 100 logs in memory
+                        if len(st.session_state['live_logs']) > 100:
+                            st.session_state['live_logs'] = st.session_state['live_logs'][-100:]
+                    
+                    # Ambil durasi dari pilihan pengguna
+                    duration_limit = None
+                    if duration_option == "⏱️ Custom Waktu":
+                        duration_limit = total_custom_seconds
+                    elif duration_option == "🎬 Ikuti Panjang Video":
+                        video_duration = get_video_duration(video_path)
+                        if video_duration:
+                            duration_limit = int(video_duration)
+                        else:
+                            st.warning("Durasi video tidak ditemukan, streaming akan berjalan tanpa batas waktu.")
+                    
+                    st.session_state['ffmpeg_thread'] = threading.Thread(
+                        target=run_ffmpeg, 
+                        args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, st.session_state['session_id'], duration_limit), 
+                        daemon=True
+                    )
+                    st.session_state['ffmpeg_thread'].start()
+                    st.success("🚀 Streaming started!")
+                    log_to_database(st.session_state['session_id'], "INFO", f"Streaming started: {video_path}")
+                    st.rerun()
+            
+            if st.button("⏹️ Stop Streaming", type="secondary"):
+                st.session_state['streaming'] = False
+                if 'stream_start_time' in st.session_state:
+                    del st.session_state['stream_start_time']
+                os.system("pkill ffmpeg")
+                if os.path.exists("temp_video.mp4"):
+                    os.remove("temp_video.mp4")
+                st.warning("⏸️ Streaming stopped!")
+                log_to_database(st.session_state['session_id'], "INFO", "Streaming stopped by user")
+                st.rerun()
+            
+            # Live broadcast info
+            if 'live_broadcast_info' in st.session_state:
+                st.subheader("📺 Live Broadcast")
+                broadcast_info = st.session_state['live_broadcast_info']
+                st.write(f"**Watch URL:** [Open Stream]({broadcast_info['watch_url']})")
+                if 'studio_url' in broadcast_info:
+                    st.write(f"**Studio URL:** [Manage]({broadcast_info['studio_url']})")
+                st.write(f"**Broadcast ID:** {broadcast_info.get('broadcast_id', 'N/A')}")
+            
+            # Statistics
+            st.subheader("📈 Statistics")
+            
+            # Session stats
+            session_logs = get_logs_from_database(st.session_state['session_id'], 50)
+            st.metric("Session Logs", len(session_logs))
+            
+            if 'live_logs' in st.session_state:
+                st.metric("Live Log Entries", len(st.session_state['live_logs']))
+            
+            # Quick actions
+            st.subheader("⚡ Quick Actions")
+            
+            if st.button("📋 Copy Stream Key"):
+                if 'current_stream_key' in st.session_state:
+                    st.code(st.session_state['current_stream_key'])
+                    st.success("Stream key displayed above!")
+            
+            if st.button("🔄 Refresh Status"):
+                st.rerun()
                 
-                def log_callback(msg):
-                    if 'live_logs' not in st.session_state:
-                        st.session_state['live_logs'] = []
-                    st.session_state['live_logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-                    # Keep only last 100 logs in memory
-                    if len(st.session_state['live_logs']) > 100:
-                        st.session_state['live_logs'] = st.session_state['live_logs'][-100:]
-                
-                # Ambil durasi dari pilihan pengguna
-                duration_limit = None
-                if duration_option == "⏱️ Custom Waktu":
-                    duration_limit = total_custom_seconds
-                elif duration_option == "🎬 Ikuti Panjang Video":
-                    video_duration = get_video_duration(video_path)
-                    if video_duration:
-                        duration_limit = int(video_duration)
-                    else:
-                        st.warning("Durasi video tidak ditemukan, streaming akan berjalan tanpa batas waktu.")
-                
-                st.session_state['ffmpeg_thread'] = threading.Thread(
-                    target=run_ffmpeg, 
-                    args=(video_path, stream_key, is_shorts, log_callback, custom_rtmp or None, st.session_state['session_id'], duration_limit), 
-                    daemon=True
-                )
-                st.session_state['ffmpeg_thread'].start()
-                st.success("🚀 Streaming started!")
-                log_to_database(st.session_state['session_id'], "INFO", f"Streaming started: {video_path}")
+            # Durasi Streaming Otomatis
+            st.subheader("🕒 Durasi Streaming Otomatis")
+
+            duration_option = st.radio(
+                "Pilih Durasi:",
+                ("🔁 Loop Selamanya", "⏱️ Custom Waktu", "🎬 Ikuti Panjang Video"),
+                index=0,
+                key="duration_option"
+            )
+
+            if duration_option == "⏱️ Custom Waktu":
+                custom_duration_hours = st.number_input("Jam", min_value=0, max_value=24, value=1, step=1)
+                custom_duration_minutes = st.number_input("Menit", min_value=0, max_value=59, value=0, step=5)
+                total_custom_seconds = custom_duration_hours * 3600 + custom_duration_minutes * 60
+            elif duration_option == "🎬 Ikuti Panjang Video":
+                st.info("Fitur ini membutuhkan deteksi durasi video menggunakan `ffprobe`. Pastikan sudah terinstal.")
+            
+            # Tampilkan estimasi durasi di UI
+            if duration_option == "⏱️ Custom Waktu":
+                st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=total_custom_seconds)}")
+            elif duration_option == "🎬 Ikuti Panjang Video" and video_path:
+                video_duration = get_video_duration(video_path)
+                if video_duration:
+                    st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=int(video_duration))}")
+        else:
+            st.info("🔐 Please authenticate with YouTube to access streaming controls.")
+    
+    # Live Logs Section (only show if authenticated)
+    if 'youtube_service' in st.session_state:
+        st.markdown("---")
+        st.header("📝 Live Streaming Logs")
+        
+        # Log tabs
+        tab1, tab2, tab3 = st.tabs(["🔴 Live Logs", "📊 Session History", "🗂️ All Logs"])
+        
+        with tab1:
+            st.subheader("Real-time Streaming Logs")
+            
+            # Live logs container
+            log_container = st.container()
+            with log_container:
+                if 'live_logs' in st.session_state and st.session_state['live_logs']:
+                    # Show last 50 live logs
+                    recent_logs = st.session_state['live_logs'][-50:]
+                    logs_text = "\n".join(recent_logs)
+                    st.text_area("Live Logs", logs_text, height=300, disabled=True, key="live_logs_display")
+                else:
+                    st.info("No live logs available. Start streaming to see real-time logs.")
+            
+            # Auto-refresh toggle
+            auto_refresh = st.checkbox("🔄 Auto-refresh logs", value=streaming)
+            
+            if auto_refresh and streaming:
+                time.sleep(2)
                 st.rerun()
         
-        if st.button("⏹️ Stop Streaming", type="secondary"):
-            st.session_state['streaming'] = False
-            if 'stream_start_time' in st.session_state:
-                del st.session_state['stream_start_time']
-            os.system("pkill ffmpeg")
-            if os.path.exists("temp_video.mp4"):
-                os.remove("temp_video.mp4")
-            st.warning("⏸️ Streaming stopped!")
-            log_to_database(st.session_state['session_id'], "INFO", "Streaming stopped by user")
-            st.rerun()
-        
-        # Live broadcast info
-        if 'live_broadcast_info' in st.session_state:
-            st.subheader("📺 Live Broadcast")
-            broadcast_info = st.session_state['live_broadcast_info']
-            st.write(f"**Watch URL:** [Open Stream]({broadcast_info['watch_url']})")
-            if 'studio_url' in broadcast_info:
-                st.write(f"**Studio URL:** [Manage]({broadcast_info['studio_url']})")
-            st.write(f"**Broadcast ID:** {broadcast_info.get('broadcast_id', 'N/A')}")
-        
-        # Statistics
-        st.subheader("📈 Statistics")
-        
-        # Session stats
-        session_logs = get_logs_from_database(st.session_state['session_id'], 50)
-        st.metric("Session Logs", len(session_logs))
-        
-        if 'live_logs' in st.session_state:
-            st.metric("Live Log Entries", len(st.session_state['live_logs']))
-        
-        # Channel info display
-        if 'channel_config' in st.session_state:
-            config = st.session_state['channel_config']
-            st.metric("Configured Channels", len(config['channels']))
-        
-        # Quick actions
-        st.subheader("⚡ Quick Actions")
-        
-        if st.button("📋 Copy Stream Key"):
-            if 'current_stream_key' in st.session_state:
-                st.code(st.session_state['current_stream_key'])
-                st.success("Stream key displayed above!")
-        
-        if st.button("🔄 Refresh Status"):
-            st.rerun()
+        with tab2:
+            st.subheader("Current Session History")
             
-        # Durasi Streaming Otomatis
-        st.subheader("🕒 Durasi Streaming Otomatis")
-
-        duration_option = st.radio(
-            "Pilih Durasi:",
-            ("🔁 Loop Selamanya", "⏱️ Custom Waktu", "🎬 Ikuti Panjang Video"),
-            index=0,
-            key="duration_option"
-        )
-
-        if duration_option == "⏱️ Custom Waktu":
-            custom_duration_hours = st.number_input("Jam", min_value=0, max_value=24, value=1, step=1)
-            custom_duration_minutes = st.number_input("Menit", min_value=0, max_value=59, value=0, step=5)
-            total_custom_seconds = custom_duration_hours * 3600 + custom_duration_minutes * 60
-        elif duration_option == "🎬 Ikuti Panjang Video":
-            st.info("Fitur ini membutuhkan deteksi durasi video menggunakan `ffprobe`. Pastikan sudah terinstal.")
-        
-        # Tampilkan estimasi durasi di UI
-        if duration_option == "⏱️ Custom Waktu":
-            st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=total_custom_seconds)}")
-        elif duration_option == "🎬 Ikuti Panjang Video" and video_path:
-            video_duration = get_video_duration(video_path)
-            if video_duration:
-                st.info(f"⏰ Streaming akan berhenti otomatis setelah {timedelta(seconds=int(video_duration))}")
-    
-    # Live Logs Section
-    st.markdown("---")
-    st.header("📝 Live Streaming Logs")
-    
-    # Log tabs
-    tab1, tab2, tab3 = st.tabs(["🔴 Live Logs", "📊 Session History", "🗂️ All Logs"])
-    
-    with tab1:
-        st.subheader("Real-time Streaming Logs")
-        
-        # Live logs container
-        log_container = st.container()
-        with log_container:
-            if 'live_logs' in st.session_state and st.session_state['live_logs']:
-                # Show last 50 live logs
-                recent_logs = st.session_state['live_logs'][-50:]
-                logs_text = "\n".join(recent_logs)
-                st.text_area("Live Logs", logs_text, height=300, disabled=True, key="live_logs_display")
+            session_logs = get_logs_from_database(st.session_state['session_id'], 100)
+            if session_logs:
+                # Create a formatted display
+                for log in session_logs[:20]:  # Show last 20 session logs
+                    timestamp, log_type, message, video_file, channel_name = log
+                    
+                    # Color code by log type
+                    if log_type == "ERROR":
+                        st.error(f"**{timestamp}** - {message}")
+                    elif log_type == "INFO":
+                        st.info(f"**{timestamp}** - {message}")
+                    elif log_type == "FFMPEG":
+                        st.text(f"{timestamp} - {message}")
+                    else:
+                        st.write(f"**{timestamp}** - {message}")
             else:
-                st.info("No live logs available. Start streaming to see real-time logs.")
+                st.info("No session logs available yet.")
         
-        # Auto-refresh toggle
-        auto_refresh = st.checkbox("🔄 Auto-refresh logs", value=streaming)
-        
-        if auto_refresh and streaming:
-            time.sleep(2)
-            st.rerun()
-    
-    with tab2:
-        st.subheader("Current Session History")
-        
-        session_logs = get_logs_from_database(st.session_state['session_id'], 100)
-        if session_logs:
-            # Create a formatted display
-            for log in session_logs[:20]:  # Show last 20 session logs
-                timestamp, log_type, message, video_file, channel_name = log
-                
-                # Color code by log type
-                if log_type == "ERROR":
-                    st.error(f"**{timestamp}** - {message}")
-                elif log_type == "INFO":
-                    st.info(f"**{timestamp}** - {message}")
-                elif log_type == "FFMPEG":
-                    st.text(f"{timestamp} - {message}")
-                else:
-                    st.write(f"**{timestamp}** - {message}")
-        else:
-            st.info("No session logs available yet.")
-    
-    with tab3:
-        st.subheader("All Historical Logs")
-        
-        # Filter options
-        col_filter1, col_filter2 = st.columns(2)
-        
-        with col_filter1:
-            log_limit = st.selectbox("Show logs", [50, 100, 200, 500], index=1)
-        
-        with col_filter2:
-            log_type_filter = st.selectbox("Filter by type", ["All", "INFO", "ERROR", "FFMPEG"])
-        
-        all_logs = get_logs_from_database(limit=log_limit)
-        
-        if all_logs:
-            # Filter by type if selected
-            if log_type_filter != "All":
-                all_logs = [log for log in all_logs if log[1] == log_type_filter]
+        with tab3:
+            st.subheader("All Historical Logs")
             
-            # Display in expandable sections
-            for i, log in enumerate(all_logs[:50]):  # Limit display to 50 for performance
-                timestamp, log_type, message, video_file, channel_name = log
+            # Filter options
+            col_filter1, col_filter2 = st.columns(2)
+            
+            with col_filter1:
+                log_limit = st.selectbox("Show logs", [50, 100, 200, 500], index=1)
+            
+            with col_filter2:
+                log_type_filter = st.selectbox("Filter by type", ["All", "INFO", "ERROR", "FFMPEG"])
+            
+            all_logs = get_logs_from_database(limit=log_limit)
+            
+            if all_logs:
+                # Filter by type if selected
+                if log_type_filter != "All":
+                    all_logs = [log for log in all_logs if log[1] == log_type_filter]
                 
-                with st.expander(f"{log_type} - {timestamp} - {message[:50]}..."):
-                    st.write(f"**Timestamp:** {timestamp}")
-                    st.write(f"**Type:** {log_type}")
-                    st.write(f"**Message:** {message}")
-                    if video_file:
-                        st.write(f"**Video File:** {video_file}")
-                    if channel_name:
-                        st.write(f"**Channel:** {channel_name}")
-        else:
-            st.info("No historical logs available.")
+                # Display in expandable sections
+                for i, log in enumerate(all_logs[:50]):  # Limit display to 50 for performance
+                    timestamp, log_type, message, video_file, channel_name = log
+                    
+                    with st.expander(f"{log_type} - {timestamp} - {message[:50]}..."):
+                        st.write(f"**Timestamp:** {timestamp}")
+                        st.write(f"**Type:** {log_type}")
+                        st.write(f"**Message:** {message}")
+                        if video_file:
+                            st.write(f"**Video File:** {video_file}")
+                        if channel_name:
+                            st.write(f"**Channel:** {channel_name}")
+            else:
+                st.info("No historical logs available.")
 
 if __name__ == '__main__':
     main()
