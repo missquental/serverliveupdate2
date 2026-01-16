@@ -786,7 +786,7 @@ def main():
     st.title("🎥 Advanced YouTube Live Streaming Platform")
     st.markdown("---")
     
-    # Auto-process authorization code if present
+    # Auto-process authorization code if present - DIPANGGIL DI SINI
     auto_process_auth_code()
     
     # Sidebar for configuration
